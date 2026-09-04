@@ -87,36 +87,36 @@ class AgentState(TypedDict):
     retry_count: int
 
 def guardrail_node(state: AgentState) -> AgentState:
-    last_user_msg = state["messages"][-1].content
+    conversation_history = "\n".join([f"{type(m).__name__}: {m.content}" for m in state["messages"]])
     prompt = (
-        "Determine if this query is asking about US Census statistics, demographics, "
-        "population, income, education, housing, or US geographic regions.\n"
+        "Determine if the ongoing conversation and latest user query are asking about US Census statistics, "
+        "demographics, population, income, education, housing, or US geographic regions.\n"
         "Return ONLY the single word VALID or INVALID. Do not add punctuation or explanation.\n\n"
-        f"Query: {last_user_msg}"
+        f"Conversation:\n{conversation_history}"
     )
     raw_msg = llm.invoke([HumanMessage(content=prompt)])
     decision = get_text(raw_msg).strip().upper()
     state["is_on_topic"] = ("VALID" in decision) and ("INVALID" not in decision)
-    print(f"\n[DEBUG Guardrail] Input: '{last_user_msg}' -> On-Topic: {state['is_on_topic']} (Raw: {decision})")
+    print(f"\n[DEBUG Guardrail] Context-aware check -> On-Topic: {state['is_on_topic']} (Raw: {decision})")
     return state
 
 def metadata_node(state: AgentState) -> AgentState:
-    last_user_msg = state["messages"][-1].content
+    conversation_history = "\n".join([f"{type(m).__name__}: {m.content}" for m in state["messages"]])
     prompt = (
-        "Extract 1 single keyword (e.g., 'income', 'education', 'age', 'housing', 'race') "
-        "from the user's question to search a census dictionary. Output ONLY the single keyword:\n\n"
-        f"Question: {last_user_msg}"
+        "Extract 1 single keyword or metric category (e.g., 'age', 'income', 'education', 'poverty', 'housing') "
+        "from the conversation history to search the census dictionary. Output ONLY the single keyword:\n\n"
+        f"{conversation_history}"
     )
     raw_msg = llm.invoke([HumanMessage(content=prompt)])
     keyword = get_text(raw_msg).strip().split()[0]
-    print(f"[DEBUG Metadata] Searching keyword: '{keyword}'")
+    print(f"[DEBUG Metadata] Searching keyword from context: '{keyword}'")
     
     state["metadata_context"] = query_metadata(keyword)
     state["retry_count"] = 0
     return state
 
 def sql_gen_node(state: AgentState) -> AgentState:
-    last_user_msg = state["messages"][-1].content
+    conversation_history = "\n".join([f"{type(m).__name__}: {m.content}" for m in state["messages"]])
     error_hint = f"\nPrevious SQL error: {state['error_message']}\nFix the query syntax." if state.get("error_message") else ""
     
     prompt = f"""
@@ -129,18 +129,19 @@ Available Demographic Columns from Metadata:
 Reference Tables:
 1. FIPS Lookup Table: "2020_METADATA_CBG_FIPS_CODES" (Columns: STATE, COUNTY, STATE_FIPS, COUNTY_FIPS)
    - Note: f.STATE contains two-letter postal abbreviations like 'CA', 'TX', 'NY'.
-2. Demographic Table: Use "2020_CBG_" + first 3 letters of TABLE_ID (e.g., "2020_CBG_B19"). Columns: CENSUS_BLOCK_GROUP, [TABLE_ID]
+2. Demographic Table: Use "2020_CBG_" + first 3 letters of TABLE_ID (e.g., "2020_CBG_B01"). Columns: CENSUS_BLOCK_GROUP, [TABLE_ID]
 
 SQL Construction Rules:
 1. JOIN the demographic table `d` with "2020_METADATA_CBG_FIPS_CODES" `f` using:
    SUBSTR(d."CENSUS_BLOCK_GROUP", 1, 2) = f."STATE_FIPS" AND SUBSTR(d."CENSUS_BLOCK_GROUP", 3, 3) = f."COUNTY_FIPS"
-2. State Filtering: If the user explicitly names states (like California and Texas), filter using `f."STATE" IN ('CA', 'TX')` so comparative queries return both regions.
+2. Handle conversational context: If the user asks for "the largest" or "highest" following a previous question, invert the ordering (e.g., ORDER BY metric DESC LIMIT 1) to find the maximum value across states or counties.
 3. Use MEDIAN(d."<TABLE_ID>") or AVG(d."<TABLE_ID>") grouped by geographic dimensions.
 4. Always enclose table and column names in double quotes.
 5. Return ONLY the raw executable SQL statement without backticks, markdown formatting, or preamble.
 {error_hint}
 
-User Question: {last_user_msg}
+Full Conversation Context:
+{conversation_history}
 """
     raw_msg = llm.invoke([HumanMessage(content=prompt)])
     clean_sql = get_text(raw_msg).replace("```sql", "").replace("```", "").strip()
