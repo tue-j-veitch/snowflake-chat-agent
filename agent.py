@@ -9,6 +9,7 @@ import pandas as pd
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph.message import add_messages
 
 load_dotenv()
 
@@ -78,7 +79,7 @@ def run_snowflake_sql(query: str) -> str:
 # --- State & Nodes ---
 
 class AgentState(TypedDict):
-    messages: List[BaseMessage]
+    messages: Annotated[List[BaseMessage], add_messages]
     is_on_topic: bool
     metadata_context: str
     sql_query: Optional[str]
