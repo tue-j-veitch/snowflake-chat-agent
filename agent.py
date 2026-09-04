@@ -117,28 +117,29 @@ def metadata_node(state: AgentState) -> AgentState:
     return state
 
 def sql_gen_node(state: AgentState) -> AgentState:
-    conversation_history = "\n".join([f"{type(m).__name__}: {m.content}" for m in state["messages"]])
+    conversation_history = "\n".join([f"{type(m).__name__}: {m.content}" for m in state['messages']])
     error_hint = f"\nPrevious SQL error: {state['error_message']}\nFix the query syntax." if state.get("error_message") else ""
     
     prompt = f"""
-You are an expert Snowflake SQL generator for the US Census dataset (SafeGraph format).
+You are an expert Snowflake SQL generator for the SafeGraph Open Census Data dataset.
 Database: US_CENSUS_DATA, Schema: PUBLIC.
 
 Available Demographic Columns from Metadata:
 {state['metadata_context']}
 
-Reference Tables:
-1. FIPS Lookup Table: "2020_METADATA_CBG_FIPS_CODES" (Columns: STATE, COUNTY, STATE_FIPS, COUNTY_FIPS)
-   - Note: f.STATE contains two-letter postal abbreviations like 'CA', 'TX', 'NY'.
-2. Demographic Table: Use "2020_CBG_" + first 3 letters of TABLE_ID (e.g., "2020_CBG_B01"). Columns: CENSUS_BLOCK_GROUP, [TABLE_ID]
+Reference Tables & Year Selection:
+The database contains both 2019 and 2020 ACS 5-year estimate tables. 
+1. Default to 2020 tables UNLESS the user explicitly asks for 2019.
+2. FIPS Lookup Table: Use "<YEAR>_METADATA_CBG_FIPS_CODES" (Columns: STATE, COUNTY, STATE_FIPS, COUNTY_FIPS)
+3. Demographic Table: Use "<YEAR>_CBG_" + first 3 letters of TABLE_ID (e.g., "2020_CBG_B01"). Columns: CENSUS_BLOCK_GROUP, [TABLE_ID]
 
 SQL Construction Rules:
-1. JOIN the demographic table `d` with "2020_METADATA_CBG_FIPS_CODES" `f` using:
+1. JOIN the demographic table `d` with the matching year's FIPS table `f` using:
    SUBSTR(d."CENSUS_BLOCK_GROUP", 1, 2) = f."STATE_FIPS" AND SUBSTR(d."CENSUS_BLOCK_GROUP", 3, 3) = f."COUNTY_FIPS"
-2. Handle conversational context: If the user asks for "the largest" or "highest" following a previous question, invert the ordering (e.g., ORDER BY metric DESC LIMIT 1) to find the maximum value across states or counties.
+2. Handle conversational context & superlatives: Sort DESCENDING for "oldest/highest/largest" (`LIMIT 1`). Sort ASCENDING for "youngest/lowest/smallest" (`LIMIT 1`).
 3. Use MEDIAN(d."<TABLE_ID>") or AVG(d."<TABLE_ID>") grouped by geographic dimensions.
 4. Always enclose table and column names in double quotes.
-5. Return ONLY the raw executable SQL statement without backticks, markdown formatting, or preamble.
+5. Return ONLY the raw executable SQL statement without backticks or formatting.
 {error_hint}
 
 Full Conversation Context:
