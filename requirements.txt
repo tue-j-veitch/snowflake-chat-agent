@@ -1,0 +1,7 @@
+streamlit
+snowflake-connector-python
+pandas
+python-dotenv
+langgraph
+langchain-core
+langchain-groq
